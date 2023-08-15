@@ -8,8 +8,8 @@ export class RedisCacheProvider implements CacheProvider {
   public readonly redisClient: RedisClientType<any, any, any>
 
   public readonly app: AnyDiscordApplication
-  public compatible: 'classes' | 'json' | 'text' | 'buffer' = 'text'
-  public sharedCache = true
+  public readonly compatible: 'classes' | 'json' | 'text' | 'buffer' = 'text'
+  public readonly sharedCache = true
 
   constructor(app: AnyDiscordApplication, cacheOptions: CompletedCacheOptions, providerOptions: RedisCacheProviderOptions) {
     this.app = app
