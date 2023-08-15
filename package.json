@@ -1,0 +1,28 @@
+{
+  "name": "@discordoo/redis-cache-prodiver",
+  "version": "1.0.0",
+  "description": "Discordoo cache provider for Redis",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint src --ext .ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "discordoo",
+    "cache",
+    "provider",
+    "redis"
+  ],
+  "author": "bit0r1n",
+  "license": "MIT",
+  "devDependencies": {
+    "@discordoo/providers": "^0.11.1",
+    "@typescript-eslint/eslint-plugin": "^6.4.0",
+    "discordoo": "^1.0.0-dev.t1692102776.0ba0b33",
+    "eslint": "^8.47.0"
+  },
+  "dependencies": {
+    "redis": "^4.6.7"
+  }
+}
