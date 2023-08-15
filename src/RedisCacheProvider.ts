@@ -2,7 +2,14 @@ import { CacheProvider } from '@discordoo/providers'
 import { AnyDiscordApplication, CompletedCacheOptions } from 'discordoo'
 import { RedisClientType, createClient } from 'redis'
 
-export type RedisCacheProviderOptions = Parameters<typeof createClient>[0]
+export enum RedisCacheProviderPerformanceMode {
+  Fast,
+  Saving
+}
+
+export type RedisCacheProviderOptions = Parameters<typeof createClient>[0] & {
+  performance?: RedisCacheProviderPerformanceMode
+}
 
 export class RedisCacheProvider implements CacheProvider {
   public readonly redisClient: RedisClientType<any, any, any>
@@ -10,10 +17,15 @@ export class RedisCacheProvider implements CacheProvider {
   public readonly app: AnyDiscordApplication
   public readonly compatible: 'classes' | 'json' | 'text' | 'buffer' = 'text'
   public readonly sharedCache = true
+  public performanceMode: RedisCacheProviderPerformanceMode = RedisCacheProviderPerformanceMode.Fast
 
   constructor(app: AnyDiscordApplication, cacheOptions: CompletedCacheOptions, providerOptions: RedisCacheProviderOptions) {
     this.app = app
     this.redisClient = createClient(providerOptions)
+
+    if (providerOptions.performance) {
+      this.performanceMode = providerOptions.performance
+    }
   }
 
   private getRedisKey(keyspace: string, storage?: string, key?: string) {
@@ -44,11 +56,22 @@ export class RedisCacheProvider implements CacheProvider {
 
     if (!keys.length) return
 
-    for (const key of keys) {
-      const value = await this.get(keyspace, storage, key)
+    if (this.performanceMode === RedisCacheProviderPerformanceMode.Fast) {
+      const values = await this.redisClient.mGet(
+        keys.map(key => this.getRedisKey(keyspace, storage, key))
+      )
+  
+      for (let i = 0; i < keys.length; i++) {
+        if (!values[i]) continue
+        await predicate(values[i] as V, keys[i] as K, this as unknown as P)
+      }
+    } else {
+      for (const key of keys) {
+        const value = await this.get(keyspace, storage, key)
 
-      if (value) {
-        await predicate(value as V, key as K, this as unknown as P)
+        if (value) {
+          await predicate(value as V, key as K, this as unknown as P)
+        }
       }
     }
   }
@@ -57,11 +80,7 @@ export class RedisCacheProvider implements CacheProvider {
 
     if (!keys.length) return false
 
-    for await (const key of keys) {
-      await this.delete(keyspace, storage, key)
-    }
-
-    return true
+    return await this.delete(keyspace, storage, keys)
   }
   async size(keyspace: string, storage: string): Promise<number> {
     return (await this.keys(keyspace, storage)).length 
@@ -78,12 +97,33 @@ export class RedisCacheProvider implements CacheProvider {
 
     if (!keys.length) return
 
-    for (const key of keys) {
-      const value = await this.get(keyspace, storage, key)
+    const keysToDelete: string[] = []
 
-      if (value && await predicate(value as V, key as K, this as unknown as P)) {
-        await this.delete(keyspace, storage, key)
+    if (this.performanceMode === RedisCacheProviderPerformanceMode.Fast) {
+      const values = await this.redisClient.mGet(
+        keys.map(key => this.getRedisKey(keyspace, storage, key))
+      )
+  
+      const keysToDelete: string[] = []
+
+      for (let i = 0; i < keys.length; i++) {
+        if (!values[i]) continue
+        if (await predicate(values[i] as V, keys[i] as K, this as unknown as P)) {
+          keysToDelete.push(keys[i] as string)
+        }
       }
+    } else {
+      for (const key of keys) {
+        const value = await this.get(keyspace, storage, key)
+
+        if (value && await predicate(value as V, key as K, this as unknown as P)) {
+          keysToDelete.push(key as string)
+        }
+      }
+    }
+
+    if (keysToDelete.length) {
+      await this.delete(keyspace, storage, keysToDelete)
     }
   }
   async filter<K = string, V = any, P extends CacheProvider = CacheProvider>(
@@ -95,11 +135,25 @@ export class RedisCacheProvider implements CacheProvider {
 
     const filtered: [K, V][] = []
 
-    for (const key of keys) {
-      const value = await this.get(keyspace, storage, key)
+    if (this.performanceMode === RedisCacheProviderPerformanceMode.Fast) {
+      const values = await this.redisClient.mGet(
+        keys.map(key => this.getRedisKey(keyspace, storage, key))
+      )
+  
+      for (let i = 0; i < keys.length; i++) {
+        if (!values[i]) continue
 
-      if (value && await predicate(value as V, key as K, this as unknown as P)) {
-        filtered.push([ key as K, value as V ])
+        if (await predicate(values[i] as V, keys[i] as K, this as unknown as P)) {
+          filtered.push([ keys[i] as K, values[i] as V ])
+        }
+      }
+    } else {
+      for (const key of keys) {
+        const value = await this.get(keyspace, storage, key)
+
+        if (value && await predicate(value as V, key as K, this as unknown as P)) {
+          filtered.push([ key as K, value as V ])
+        }
       }
     }
 
@@ -114,11 +168,23 @@ export class RedisCacheProvider implements CacheProvider {
 
     const mapped: R[] = []
 
-    for (const key of keys) {
-      const value = await this.get(keyspace, storage, key)
+    if (this.performanceMode === RedisCacheProviderPerformanceMode.Fast) {
+      const values = await this.redisClient.mGet(
+        keys.map(key => this.getRedisKey(keyspace, storage, key))
+      )
 
-      if (value) {
-        mapped.push(await predicate(value as V, key as K, this as unknown as P))
+      for (let i = 0; i < keys.length; i++) {
+        if (!values[i]) continue
+
+        mapped.push(await predicate(values[i] as V, keys[i] as K, this as unknown as P))
+      }
+    } else {
+      for (const key of keys) {
+        const value = await this.get(keyspace, storage, key)
+
+        if (value) {
+          mapped.push(await predicate(value as V, key as K, this as unknown as P))
+        }
       }
     }
 
@@ -131,11 +197,25 @@ export class RedisCacheProvider implements CacheProvider {
 
     if (!keys.length) return undefined
 
-    for (const key of keys) {
-      const value = await this.get(keyspace, storage, key)
+    if (this.performanceMode === RedisCacheProviderPerformanceMode.Fast) {
+      const values = await this.redisClient.mGet(
+        keys.map(key => this.getRedisKey(keyspace, storage, key))
+      )
 
-      if (value && await predicate(value as V, key as K, this as unknown as P)) {
-        return value as V
+      for (let i = 0; i < keys.length; i++) {
+        if (!values[i]) continue
+
+        if (await predicate(values[i] as V, keys[i] as K, this as unknown as P)) {
+          return values[i] as V
+        }
+      }
+    } else {
+      for (const key of keys) {
+        const value = await this.get(keyspace, storage, key)
+
+        if (value && await predicate(value as V, key as K, this as unknown as P)) {
+          return value as V
+        }
       }
     }
 
@@ -150,11 +230,25 @@ export class RedisCacheProvider implements CacheProvider {
 
     let count = 0
 
-    for (const key of keys) {
-      const value = await this.get(keyspace, storage, key)
+    if (this.performanceMode === RedisCacheProviderPerformanceMode.Fast) {
+      const values = await this.redisClient.mGet(
+        keys.map(key => this.getRedisKey(keyspace, storage, key))
+      )
 
-      if (value && await predicate(value as V, key as K, this as unknown as P)) {
-        count++
+      for (let i = 0; i < keys.length; i++) {
+        if (!values[i]) continue
+
+        if (await predicate(values[i] as V, keys[i] as K, this as unknown as P)) {
+          count++
+        }
+      }
+    } else {
+      for (const key of keys) {
+        const value = await this.get(keyspace, storage, key)
+
+        if (value && await predicate(value as V, key as K, this as unknown as P)) {
+          count++
+        }
       }
     }
 
@@ -172,11 +266,25 @@ export class RedisCacheProvider implements CacheProvider {
     for (const predicate of predicates) {
       let count = 0
 
-      for (const key of keys) {
-        const value = await this.get(keyspace, storage, key)
+      if (this.performanceMode === RedisCacheProviderPerformanceMode.Fast) {
+        const values = await this.redisClient.mGet(
+          keys.map(key => this.getRedisKey(keyspace, storage, key))
+        )
 
-        if (value && await predicate(value as V, key as K, this as unknown as P)) {
-          count++
+        for (let i = 0; i < keys.length; i++) {
+          if (!values[i]) continue
+
+          if (await predicate(values[i] as V, keys[i] as K, this as unknown as P)) {
+            count++
+          }
+        }
+      } else {
+        for (const key of keys) {
+          const value = await this.get(keyspace, storage, key)
+
+          if (value && await predicate(value as V, key as K, this as unknown as P)) {
+            count++
+          }
         }
       }
 
