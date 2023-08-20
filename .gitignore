@@ -1,5 +1,6 @@
 # Build
 dist
+types
 
 # Dependencies
 node_modules
